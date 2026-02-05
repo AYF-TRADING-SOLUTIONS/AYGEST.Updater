@@ -63,6 +63,26 @@ namespace AYGEST.Updater.Properties {
         /// <summary>
         ///   Consulta um recurso localizado do tipo System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap Ativo_2dasf {
+            get {
+                object obj = ResourceManager.GetObject("Ativo 2dasf", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Consulta um recurso localizado do tipo System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap AYGEST_WHITE {
+            get {
+                object obj = ResourceManager.GetObject("AYGEST WHITE", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Consulta um recurso localizado do tipo System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap PNG_ALTA_RESOLUÇÃO_AYG {
             get {
                 object obj = ResourceManager.GetObject("PNG ALTA RESOLUÇÃO AYG", resourceCulture);

@@ -92,5 +92,11 @@
   <ItemGroup>
     <None Include="Resources\PNG ALTA RESOLUÇÃO AYG.png" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\Ativo 2dasf.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\AYGEST WHITE.png" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

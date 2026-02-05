@@ -3,19 +3,21 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace AYGEST.Updater
 {
     public partial class UpdaterForm : Form
     {
-        // Repo: https://github.com/AYF-TRADING-SOLUTIONS/AYGEST-ERP
-        private const string Owner = "AYF-TRADING-SOLUTIONS";
-        private const string Repo = "AYGEST-ERP";
+        //Downalod teste: https://github.com/AYF-TRADING-SOLUTIONS/AYGEST.Updater/releases/latest/download/AYGEST_UPDATE_1.0.2.exe
+        // Repo público de updates (o teu)
+        // Base: https://github.com/AYF-TRADING-SOLUTIONS/AYGEST.Updater/releases/latest/download/
+        private const string DownloadBase =
+            "https://github.com/AYF-TRADING-SOLUTIONS/AYGEST.Updater/releases/latest/download/";
 
         private const string AppExeName = "AYGEST ERP.exe";
         private static readonly string InstallDir = @"C:\AYF\AYGEST";
@@ -24,7 +26,7 @@ namespace AYGEST.Updater
 
         private bool _restart = false;
         private int? _parentPid = null;
-
+        private bool _allowClose = false;
         public UpdaterForm(string[] args)
         {
             InitializeComponent();
@@ -34,16 +36,15 @@ namespace AYGEST.Updater
             Directory.CreateDirectory(WorkDir);
 
             progressBar.Value = 0;
-            btnClose.Enabled = false; // só habilita no fim/erro
-
             btnCloseAction.Enabled = false;
 
             borderlessForm.DragForm = true;
             borderlessForm.DockIndicatorTransparencyValue = 0.6;
             borderlessForm.TransparentWhileDrag = true;
 
+            // TLS 1.2 para GitHub (net48)
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         }
-
         private void ParseArgs(string[] args)
         {
             foreach (var a in args ?? new string[0])
@@ -59,7 +60,6 @@ namespace AYGEST.Updater
                 }
             }
         }
-        private bool _allowClose = false;
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (!_allowClose)
@@ -80,90 +80,88 @@ namespace AYGEST.Updater
                 KillByNameIfStillRunning("AYGEST ERP");
 
                 // 2) ler versão local
-                var local = GetLocalVersion();
-                SetStatus($"Versão instalada: {local}", 8);
+                var local = GetLocalVersionAYGEST();
+                SetStatus($"Versão instalada: {local}", 10);
 
-                // 3) buscar latest release
-                SetStatus("A consultar GitHub Releases...", 15);
-                var latest = await GetLatestReleaseAsync();
+                // 3) baixar version.json direto do Latest
+                SetStatus("A verificar atualização...", 18);
 
-                // 4) baixar version.json
-                var verAsset = latest.assets?.FirstOrDefault(a => a.name.Equals("version.json", StringComparison.OrdinalIgnoreCase));
-                if (verAsset == null) throw new Exception("Asset version.json não encontrado na release latest.");
-
-                SetStatus("A ler política de update...", 20);
-                var versionJson = await DownloadStringAsync(verAsset.browser_download_url);
+                var versionUrl = DownloadBase + "version.json";
+                var versionJson = await DownloadStringAsync(versionUrl);
 
                 var info = JsonConvert.DeserializeObject<VersionInfo>(versionJson);
                 if (info == null || string.IsNullOrWhiteSpace(info.version))
                     throw new Exception("version.json inválido.");
 
                 var remote = new Version(info.version);
+                lbNovaVersao.Text ="Nova versão: "+ remote.ToString();
                 SetStatus($"Versão disponível: {remote}", 25);
 
-                // 5) sem update → só reinicia app e sai
+                // 4) Sem update
                 if (remote <= local)
                 {
                     SetStatus("Sem atualização. A iniciar AYGEST...", 100);
+                    Thread.Sleep(10000); // pequena pausa pra UX
                     if (_restart) StartApp(updatedFlag: true);
-                    btnClose.Enabled = true;
-                    Close();
+
+                    FinishAndClose();
                     return;
                 }
 
-                // 6) update obrigatório (no teu caso é sempre true, mas validamos)
+                // 5) Update obrigatório
                 if (!info.mandatory)
                 {
+                    // no teu caso podes nunca usar isto, mas mantive
                     SetStatus("Atualização disponível (não obrigatória). A iniciar AYGEST...", 100);
                     if (_restart) StartApp(updatedFlag: true);
-                    btnClose.Enabled = true;
-                    Close();
+
+                    FinishAndClose();
                     return;
                 }
 
-                // 7) baixar instalador
+                // 6) Baixar instalador do Latest
                 var setupName = info.installerAssetName;
                 if (string.IsNullOrWhiteSpace(setupName))
                     throw new Exception("installerAssetName vazio no version.json.");
 
-                var setupAsset = latest.assets?.FirstOrDefault(a => a.name.Equals(setupName, StringComparison.OrdinalIgnoreCase));
-                if (setupAsset == null)
-                    throw new Exception("Instalador não encontrado na release: " + setupName);
-
+                var setupUrl = DownloadBase + setupName;
                 var setupPath = Path.Combine(WorkDir, setupName);
 
-                SetStatus($"A baixar {setupName}...", 30);
-                await DownloadFileWithProgressAsync(setupAsset.browser_download_url, setupPath, 30, 80);
+                // Limpa instalador antigo com mesmo nome (evita arquivo corrompido)
+                SafeDelete(setupPath);
 
-                // 8) instalar silencioso (Inno)
+                SetStatus($"A baixar {setupName}...", 30);
+                await DownloadFileWithProgressAsync(setupUrl, setupPath, 30, 80);
+
+                // 7) Instalar silencioso (Inno)
                 SetStatus("A aplicar atualização...", 85);
                 var code = RunInnoSilent(setupPath);
 
                 if (code != 0)
                     throw new Exception("Instalação falhou. Código: " + code);
 
-                // 9) reiniciar app
+                // 8) reiniciar app
                 SetStatus("Atualizado com sucesso. A iniciar AYGEST...", 100);
                 if (_restart) StartApp(updatedFlag: true);
 
-                btnClose.Enabled = true;
-                btnCloseAction.Enabled = true;
-                _allowClose = true;
-                Close();
+                FinishAndClose();
             }
             catch (Exception ex)
             {
                 Log("ERROR: " + ex);
                 SetStatus("Falha na atualização: " + ex.Message, 100);
 
-                // Como é obrigatório, podes optar por NÃO abrir o AYGEST aqui.
-                // Se quiseres abrir mesmo assim, chama StartApp(updatedFlag:true).
-                btnClose.Enabled = true;
+                // obrigatório: eu recomendo NÃO iniciar AYGEST aqui
                 btnCloseAction.Enabled = true;
                 _allowClose = true;
             }
         }
-
+        private void FinishAndClose()
+        {
+            btnCloseAction.Enabled = true;
+            _allowClose = true;
+            Close();
+        }
         private async Task CloseParentProcessIfAny()
         {
             if (!_parentPid.HasValue) return;
@@ -175,14 +173,13 @@ namespace AYGEST.Updater
 
                 SetStatus("A fechar AYGEST...", 12);
                 p.CloseMainWindow();
-                await Task.Run(() => p.WaitForExit(6000));
 
+                await Task.Run(() => p.WaitForExit(6000));
                 if (!p.HasExited)
                     p.Kill();
             }
-            catch { /* ignora */ }
+            catch { }
         }
-
         private void KillByNameIfStillRunning(string name)
         {
             foreach (var p in Process.GetProcessesByName(name))
@@ -194,31 +191,17 @@ namespace AYGEST.Updater
                 catch { }
             }
         }
-
-        private Version GetLocalVersion()
+        private Version GetLocalVersionAYGEST()
         {
             var exe = Path.Combine(InstallDir, AppExeName);
             if (!File.Exists(exe)) return new Version(0, 0, 0, 0);
 
             var fvi = FileVersionInfo.GetVersionInfo(exe);
-            if (Version.TryParse(fvi.FileVersion, out var v)) return v;
+            if (Version.TryParse(fvi.FileVersion, out var v)) 
+                return v;
 
             return new Version(0, 0, 0, 0);
         }
-
-        private async Task<GithubRelease> GetLatestReleaseAsync()
-        {
-            var url = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
-
-            using (var http = CreateHttp())
-            {
-                var json = await http.GetStringAsync(url);
-                var rel = JsonConvert.DeserializeObject<GithubRelease>(json);
-                if (rel == null) throw new Exception("Não foi possível ler a release latest.");
-                return rel;
-            }
-        }
-
         private async Task<string> DownloadStringAsync(string url)
         {
             using (var http = CreateHttp())
@@ -227,13 +210,11 @@ namespace AYGEST.Updater
                 var body = await resp.Content.ReadAsStringAsync();
 
                 if (!resp.IsSuccessStatusCode)
-                    throw new Exception($"HTTP {(int)resp.StatusCode} ({resp.ReasonPhrase}) ao baixar: {url}\n{body}");
+                    throw new Exception($"HTTP {(int)resp.StatusCode} ({resp.ReasonPhrase})\nURL: {url}\n{body}");
 
                 return body;
             }
         }
-
-
         private async Task DownloadFileWithProgressAsync(string url, string path, int startPercent, int endPercent)
         {
             using (var http = CreateHttp())
@@ -242,7 +223,7 @@ namespace AYGEST.Updater
                 if (!resp.IsSuccessStatusCode)
                 {
                     var body = await resp.Content.ReadAsStringAsync();
-                    throw new Exception($"HTTP {(int)resp.StatusCode} ({resp.ReasonPhrase}) ao baixar: {url}\n{body}");
+                    throw new Exception($"HTTP {(int)resp.StatusCode} ({resp.ReasonPhrase})\nURL: {url}\n{body}");
                 }
 
                 var total = resp.Content.Headers.ContentLength ?? -1L;
@@ -275,7 +256,6 @@ namespace AYGEST.Updater
 
             SetProgress(endPercent);
         }
-
         private int RunInnoSilent(string installerPath)
         {
             var args =
@@ -297,7 +277,6 @@ namespace AYGEST.Updater
             p.WaitForExit();
             return p.ExitCode;
         }
-
         private void StartApp(bool updatedFlag)
         {
             var exe = Path.Combine(InstallDir, AppExeName);
@@ -315,12 +294,10 @@ namespace AYGEST.Updater
         private HttpClient CreateHttp()
         {
             var http = new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(25);
             http.DefaultRequestHeaders.UserAgent.ParseAdd("AYGEST-Updater-Net48/1.0");
-            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
             return http;
         }
-
-
         private void SetStatus(string text, int pct)
         {
             if (InvokeRequired)
@@ -332,7 +309,6 @@ namespace AYGEST.Updater
             lblStatus.Text = text;
             SetProgress(pct);
         }
-
         private void SetProgress(int pct)
         {
             if (pct < 0) pct = 0;
@@ -345,8 +321,11 @@ namespace AYGEST.Updater
             }
 
             progressBar.Value = pct;
-        }
 
+            // Se tiveres label de percent (opcional), ele não vai crashar
+            var lbl = this.Controls.Find("lblPercent", true).FirstOrDefault() as Label;
+            if (lbl != null) lbl.Text = pct + "%";
+        }
         private void Log(string msg)
         {
             try
@@ -356,9 +335,18 @@ namespace AYGEST.Updater
             }
             catch { }
         }
-
+        private void SafeDelete(string filePath)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                    File.Delete(filePath);
+            }
+            catch { }
+        }
         private void btnClose_Click(object sender, EventArgs e)
         {
+            _allowClose = true;
             Close();
         }
     }
